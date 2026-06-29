@@ -11,10 +11,9 @@ import { SAVE_CURRENT_PAGE_COMMAND } from './lib/commands'
  *
  * The Chrome Web Store is different: it **rejects** a `key` in the uploaded
  * package ("key field is not allowed in manifest") and mints its own permanent
- * ID for the listing — which will NOT be the ID above. So the store artifact
- * must omit `key` (see `WXT_STORE_BUILD` below), and once the listing exists
- * its assigned ID has to be added to `EXTENSION_ORIGINS` for the native hop to
- * work for store-installed users.
+ * ID for the listing: `ccabifmooehighoonjeiololjfofkhkd`. So the store
+ * artifact must omit `key` (see `WXT_STORE_BUILD` below), while the desktop
+ * native-messaging allowlist keeps both IDs.
  */
 const PUBLIC_KEY =
   'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7EMDbrG/PhZAaAz9GauuPizNI+98ua2aaI5yDgDEbXMk86Wm6LByEVD/ZVAJCa+Ic8xXeLw4GEDyNPPxM940eeoeDbU3KHWp1jl99WroEhMXFl1uYyXQ/0yFhZwIolDEt02uDCF+fDS93UMP8AJQKYxtLO2NH4wsv66gdRP1CEA82VUXiJV0R9b1BvIVVr8HJFHR4zmA9YsNbBTUQtkOGYuSz4mWrSZ7QKWP7RDdQcHFI6t9Y58+Bk8/4Ps1gmbGHPCWy5iURQ37m8ibPaVvrGOrAoS3n09E/4jP2OeCa2oM2gH3AcEz7T6daTdk+rzJ0VMbR4PNKLOiLYknxsigDQIDAQAB'

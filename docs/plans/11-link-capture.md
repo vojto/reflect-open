@@ -77,8 +77,9 @@ the inbox *is* the IPC:
 - The desktop app **rewrites user-level host manifests on every launch**, for **detected
   browsers only** (Chrome channels, Chromium, Edge, Brave, Vivaldi, Opera, Arc — Arc has
   its own dir; Windows uses HKCU keys). Launch-time rewrite self-heals macOS app
-  translocation and app moves. `allowed_origins` pins both the Chrome Web Store and Edge
-  Add-ons extension IDs; dev builds share the store ID via the manifest `key` trick.
+  translocation and app moves. `allowed_origins` pins both the Chrome Web Store
+  listing ID and the key-derived unpacked dev ID; a future Edge Add-ons listing
+  would add its own ID too.
 - **Fallback: loopback HTTP** only if native-messaging **packaging** proves unshippable
   (payload size is not a reason). If ever built, copy Joplin's model: loopback-only
   bind, `/ping` discovery, accept/reject pairing dialog minting a token, Host-header

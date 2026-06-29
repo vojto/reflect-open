@@ -27,11 +27,13 @@ const HOST_NAME: &str = "app.reflect.capture";
 const HOST_BINARY: &str = "reflect-capture-host";
 
 /// Extension IDs allowed to launch the host. The first is the dev/unpacked ID,
-/// pinned by the `key` field in `apps/extension/wxt.config.ts` — the Chrome
-/// Web Store ID joins this list after first publish (the store derives the
-/// same ID when the manifest keeps that key).
+/// pinned by the `key` field in `apps/extension/wxt.config.ts`; the second is
+/// the published Chrome Web Store listing.
 #[cfg(any(target_os = "macos", test))]
-const EXTENSION_ORIGINS: [&str; 1] = ["chrome-extension://dlbliojklpickgimjdmjjdnbjdiomjik/"];
+const EXTENSION_ORIGINS: [&str; 2] = [
+    "chrome-extension://dlbliojklpickgimjdmjjdnbjdiomjik/",
+    "chrome-extension://ccabifmooehighoonjeiololjfofkhkd/",
+];
 
 /// Graph-relative spool directory the host writes and the drain reads.
 const INBOX_DIR: &str = ".reflect/inbox";
@@ -410,8 +412,11 @@ mod tests {
             "/Applications/Reflect.app/Contents/MacOS/reflect-capture-host"
         );
         assert_eq!(
-            parsed["allowed_origins"][0],
-            "chrome-extension://dlbliojklpickgimjdmjjdnbjdiomjik/"
+            parsed["allowed_origins"],
+            serde_json::json!([
+                "chrome-extension://dlbliojklpickgimjdmjjdnbjdiomjik/",
+                "chrome-extension://ccabifmooehighoonjeiololjfofkhkd/"
+            ])
         );
     }
 

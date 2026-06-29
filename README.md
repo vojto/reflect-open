@@ -58,6 +58,18 @@ public key compiled into the app.
 
 Or [build from source](#building-from-source).
 
+## Browser capture
+
+Install
+[Reflect Capture from the Chrome Web Store](https://chromewebstore.google.com/detail/reflect-capture/ccabifmooehighoonjeiololjfofkhkd)
+to save the current page into Reflect from Chrome. The extension captures the
+page URL, title, selected text, screenshot, and optional page text, then hands
+the capture to the installed Mac app through a local native-messaging host.
+
+No Reflect server is in the path. If Reflect is closed, the host queues the
+capture in your graph's local `.reflect/inbox/` folder and the app imports it
+the next time it runs.
+
 ## Your notes are just files
 
 Reflect calls a notes folder a **graph**. Point it at any folder and it
@@ -157,8 +169,9 @@ contributor guide.
 ## Status & roadmap
 
 Reflect is early (`v0.2.2`) but used daily. Shipped today: everything
-listed above, plus browser link capture through the Chrome extension/native
-host pipeline described in the
+listed above, plus browser link capture through the
+[Reflect Capture Chrome extension](https://chromewebstore.google.com/detail/reflect-capture/ccabifmooehighoonjeiololjfofkhkd)
+and native host pipeline described in the
 [link capture design](docs/plans/11-link-capture.md).
 
 Designed or in progress, each with a written plan:

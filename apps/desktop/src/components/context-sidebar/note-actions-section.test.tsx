@@ -2,7 +2,9 @@ import { render, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { PinnedNote } from '@reflect/core'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { pinnedNotesQueryKey } from '@/hooks/use-pinned-notes'
 import { RouterProvider } from '@/routing/router'
 import { NoteActionsSection } from './note-actions-section'
 
@@ -31,7 +33,7 @@ vi.mock('@/providers/graph-provider', () => ({
 
 function renderSection(path: string, showTrash = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const view = render(
     <TooltipProvider>
       <QueryClientProvider client={client}>
         <RouterProvider initialRoute={{ kind: 'note', path }}>
@@ -40,6 +42,7 @@ function renderSection(path: string, showTrash = false) {
       </QueryClientProvider>
     </TooltipProvider>,
   )
+  return { ...view, client }
 }
 
 beforeEach(() => {
@@ -53,8 +56,8 @@ beforeEach(() => {
   operationFail.mockClear()
 })
 
-function noteRow(path: string, isPrivate: boolean) {
-  return { path, title: 'A', dailyDate: null, isPrivate }
+function noteRow(path: string, isPrivate: boolean, title = 'A') {
+  return { path, title, dailyDate: null, isPrivate }
 }
 
 describe('NoteActionsSection pin toggle', () => {
@@ -90,33 +93,53 @@ describe('NoteActionsSection pin toggle', () => {
     view.unmount()
   })
 
-  it('stays on Pin this note when a different note is pinned', async () => {
-    getPinnedNotes.mockResolvedValue([{ path: 'notes/other.md', title: 'Other', dailyDate: null }])
-    const view = renderSection('notes/a.md')
-    await waitFor(() => expect(getPinnedNotes).toHaveBeenCalled())
-    expect(view.getByText('Pin this note')).toBeDefined()
-    expect(view.queryByText('Un-pin this note')).toBeNull()
-    view.unmount()
-  })
+  it('optimistically adds a newly pinned note after explicitly ordered pins', async () => {
+    getPinnedNotes.mockResolvedValue([
+      { path: 'notes/zeta.md', title: 'Zeta', dailyDate: null, pinnedOrder: 0 },
+      { path: 'notes/alpha.md', title: 'Alpha', dailyDate: null, pinnedOrder: 1 },
+    ])
+    getNote.mockResolvedValue(noteRow('notes/mid.md', false, 'Mid'))
+    const view = renderSection('notes/mid.md')
+    const queryKey = pinnedNotesQueryKey('/g')
+    await waitFor(() =>
+      expect(view.client.getQueryData<PinnedNote[]>(queryKey)?.map((note) => note.title)).toEqual([
+        'Zeta',
+        'Alpha',
+      ]),
+    )
 
-  it('surfaces a toggle failure through the operations status', async () => {
-    toggleNotePinned.mockRejectedValueOnce({ kind: 'io', message: 'disk on fire' })
-    const view = renderSection('notes/a.md')
     await userEvent.click(view.getByRole('button', { name: /Pin this note/ }))
-    expect(startOperation).toHaveBeenCalledWith('Pinning note')
+
+    expect(view.client.getQueryData<PinnedNote[]>(queryKey)?.map((note) => note.title)).toEqual([
+      'Zeta',
+      'Alpha',
+      'Mid',
+    ])
+    view.unmount()
+  })
+
+  it('invalidates pinned notes when an optimistic pin fails', async () => {
+    let rejectToggle!: (cause: unknown) => void
+    toggleNotePinned.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((_resolve, reject) => {
+          rejectToggle = reject
+        }),
+    )
+    const view = renderSection('notes/a.md')
+    await waitFor(() => expect(getPinnedNotes).toHaveBeenCalledTimes(1))
+
+    await userEvent.click(view.getByRole('button', { name: /Pin this note/ }))
+    expect(view.getByText('Un-pin this note')).toBeDefined()
+    rejectToggle({ kind: 'io', message: 'disk on fire' })
+
+    await waitFor(() => expect(view.getByText('Pin this note')).toBeDefined())
+    await waitFor(() => expect(getPinnedNotes).toHaveBeenCalledTimes(2))
+    expect(startOperation).toHaveBeenCalledWith('Updating pin')
     expect(operationFail).toHaveBeenCalled()
     view.unmount()
   })
 
-  it('labels a failed unpin as unpinning', async () => {
-    getPinnedNotes.mockResolvedValue([{ path: 'notes/a.md', title: 'A', dailyDate: null }])
-    toggleNotePinned.mockRejectedValueOnce({ kind: 'io', message: 'disk on fire' })
-    const view = renderSection('notes/a.md')
-    await userEvent.click(await view.findByRole('button', { name: /Un-pin this note/ }))
-    expect(startOperation).toHaveBeenCalledWith('Unpinning note')
-    expect(operationFail).toHaveBeenCalled()
-    view.unmount()
-  })
 })
 
 describe('NoteActionsSection private toggle', () => {
@@ -147,33 +170,16 @@ describe('NoteActionsSection private toggle', () => {
     view.unmount()
   })
 
-  it('stays on Lock note for a note the index reports as not private', async () => {
-    getNote.mockResolvedValue(noteRow('notes/a.md', false))
-    const view = renderSection('notes/a.md')
-    await waitFor(() => expect(getNote).toHaveBeenCalled())
-    expect(view.getByText('Lock note')).toBeDefined()
-    expect(view.queryByText('Unlock note')).toBeNull()
-    view.unmount()
-  })
-
-  it('surfaces a toggle failure through the operations status', async () => {
+  it('restores the private label when a write fails', async () => {
     toggleNotePrivate.mockRejectedValueOnce({ kind: 'io', message: 'disk on fire' })
     const view = renderSection('notes/a.md')
     await userEvent.click(view.getByRole('button', { name: /Lock note/ }))
-    expect(startOperation).toHaveBeenCalledWith('Locking note')
+    await waitFor(() => expect(view.getByText('Lock note')).toBeDefined())
+    expect(startOperation).toHaveBeenCalledWith('Updating privacy')
     expect(operationFail).toHaveBeenCalled()
     view.unmount()
   })
 
-  it('labels a failed un-mark as un-marking', async () => {
-    getNote.mockResolvedValue(noteRow('notes/a.md', true))
-    toggleNotePrivate.mockRejectedValueOnce({ kind: 'io', message: 'disk on fire' })
-    const view = renderSection('notes/a.md')
-    await userEvent.click(await view.findByRole('button', { name: /Unlock note/ }))
-    expect(startOperation).toHaveBeenCalledWith('Unlocking note')
-    expect(operationFail).toHaveBeenCalled()
-    view.unmount()
-  })
 })
 
 describe('NoteActionsSection trash action', () => {

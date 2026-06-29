@@ -151,7 +151,7 @@ function toTaskRow(row: {
 }
 
 /**
- * Every open checkbox across the graph, with note context, for the Tasks view.
+ * Every open task across the graph, with note context, for the Tasks view.
  * `private: true` notes' tasks **are** included: the Tasks view is a local-only
  * surface that never sends content anywhere — exactly like local search and the
  * daily stream — so the `private` hard-block (content never leaves the device)
@@ -168,7 +168,7 @@ export async function getOpenTasks(): Promise<OpenTask[]> {
 }
 
 /**
- * Completed checkboxes across the graph, most-recently-edited note first — the
+ * Completed tasks across the graph, most-recently-edited note first — the
  * Tasks view's "show archived" surface. Same shape as {@link getOpenTasks}, so
  * the view groups and renders both the same way (completed rows struck through).
  */
@@ -308,6 +308,7 @@ export interface PinnedNote {
   path: string
   title: string
   dailyDate: string | null
+  pinnedOrder?: number | null
 }
 
 /**
@@ -320,7 +321,7 @@ export async function getPinnedNotes(): Promise<PinnedNote[]> {
   return db
     .selectFrom('notes')
     .where('isPinned', '=', 1)
-    .select(['path', 'title', 'dailyDate'])
+    .select(['path', 'title', 'dailyDate', 'pinnedOrder'])
     .orderBy(sql`pinned_order IS NULL`)
     .orderBy('pinnedOrder')
     .orderBy('titleKey')

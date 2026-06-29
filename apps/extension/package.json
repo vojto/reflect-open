@@ -14,7 +14,7 @@
   "dependencies": {
     "@reflect/core": "workspace:*",
     "@reflect/design-system": "workspace:*",
-    "defuddle": "^0.18.1",
+    "defuddle": "^0.19.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "zod": "^4.4.3"
@@ -25,8 +25,8 @@
     "@types/react-dom": "^19.2.3",
     "@wxt-dev/module-react": "^1.2.2",
     "tailwindcss": "^4.3.1",
-    "typescript": "~5.8.3",
+    "typescript": "~6.0.3",
     "vitest": "^4.1.9",
-    "wxt": "^0.20.26"
+    "wxt": "^0.20.27"
   }
 }

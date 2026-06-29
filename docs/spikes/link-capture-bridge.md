@@ -87,8 +87,9 @@ must-be-running flaw) is pure cost. Instead:
     Chrome/Brave/Vivaldi/Opera, and Edge falls back to it by documented search order; add
     an explicit Edge key for completeness.
   - The manifest `path` may point inside the .app bundle (standard practice).
-- **Stable extension IDs:** pin the Chrome Web Store ID via the manifest `key` trick so
-  dev builds share it; list both CWS and Edge Add-ons IDs in `allowed_origins`
+- **Stable extension IDs:** the Chrome Web Store mints the listing ID, while unpacked
+  dev builds keep a separate key-derived ID via the manifest `key` trick. List both in
+  `allowed_origins`; add the Edge Add-ons ID there too if/when an Edge listing ships
   (wildcards are not allowed). Firefox later: different manifest (`allowed_extensions` +
   fixed gecko ID); Safari: a wholly different pipeline (extension inside a containing
   app, `SFSafariWebExtensionHandler`) — out of first wave, but see §6.

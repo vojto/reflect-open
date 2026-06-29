@@ -1,6 +1,6 @@
 [package]
 name = "reflect-open"
-version = "0.3.4-beta.3"
+version = "0.4.0-beta.5"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -15,13 +15,13 @@ name = "reflect_open_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 # `devtools` compiles the web inspector into release builds too (it is otherwise
 # debug-only), so a shipped app stays debuggable — see `src/devtools.rs`.
-tauri = { version = "2", features = ["protocol-asset", "devtools"] }
-tauri-plugin-opener = "2"
+tauri = { version = "2.11.3", features = ["protocol-asset", "devtools"] }
+tauri-plugin-opener = "2.5.4"
 serde = { workspace = true }
 serde_json = { workspace = true }
 # `hooks` adds the authorizer API used to lock the read-only `db_query` bridge
@@ -32,9 +32,9 @@ tempfile = { workspace = true }
 dirs = "6.0.0"
 tauri-plugin-dialog = "2.7.1"
 base64 = "0.22.1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-keyring = { version = "3", features = [
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+keyring = { version = "3.6.3", features = [
   "apple-native",
   "windows-native",
   "sync-secret-service",
@@ -44,7 +44,7 @@ keyring = { version = "3", features = [
 # openssl must never link against homebrew dylibs the distributed app won't
 # have (libssh2-sys only consults pkg-config when LIBSSH2_SYS_USE_PKG_CONFIG
 # is set, and vendored-openssl pins the rest).
-git2 = { version = "0.21", default-features = false, features = [
+git2 = { version = "0.21.0", default-features = false, features = [
   "https",
   "ssh",
   "vendored-libgit2",
@@ -53,8 +53,8 @@ git2 = { version = "0.21", default-features = false, features = [
 tauri-plugin-http = "2.5.9"
 # Link capture (Plan 11): screenshot downscale + the bounded meta-scrape fetch.
 # reqwest 0.12 rides the exact version tauri-plugin-http already compiles.
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
 
 # Desktop-only capabilities (Plan 19): auto-update (mobile updates go through
 # the app stores), window-state (no windows to restore on mobile), the file
@@ -63,16 +63,33 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # semantic search is desktop-only in the first mobile wave), and OS-trash
 # deletes (mobile moves into the graph-local `.reflect/trash/` instead).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
-tauri-plugin-window-state = "2"
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-window-state = "2.4.1"
 trash = "5.2.6"
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
-fastembed = "5"
 # Direct dependency on fastembed's own downloader, used to pre-fetch the
 # embedding model with byte-level progress (fastembed downloads silently).
 hf-hub = { version = "0.5.0", default-features = false, features = ["ureq", "native-tls"] }
+
+[target.'cfg(all(not(any(target_os = "android", target_os = "ios")), not(all(target_os = "macos", target_arch = "x86_64"))))'.dependencies]
+fastembed = "5.13.0"
+
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+# fastembed 5.14+ pins ONNX Runtime API 24, but upstream ONNX Runtime 1.24
+# no longer ships macOS x86_64 binaries. Stay on API 23 for Intel until the
+# upstream binary set comes back or we replace the backend.
+fastembed = { version = ">=5.13.0, <5.14.0", default-features = false, features = [
+  "hf-hub-native-tls",
+  "image-models",
+  "ort-load-dynamic",
+] }
+ort = { version = "=2.0.0-rc.11", default-features = false, features = [
+  "ndarray",
+  "std",
+  "load-dynamic",
+] }
 
 # Mobile-only capabilities (Plan 19): the first-party keyboard bridge — no
 # software keyboard on desktop. (Sharing uses the webview's Web Share API,
@@ -81,5 +98,4 @@ hf-hub = { version = "0.5.0", default-features = false, features = ["ureq", "nat
 tauri-plugin-keyboard = { path = "../../../plugins/tauri-plugin-keyboard" }
 
 [dev-dependencies]
-tauri = { version = "2", features = ["test"] }
-
+tauri = { version = "2.11.2", features = ["test"] }

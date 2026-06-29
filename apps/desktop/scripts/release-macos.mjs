@@ -21,7 +21,17 @@
 
 import { execFileSync, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
@@ -32,6 +42,14 @@ const UPDATER_KEYCHAIN_SERVICE = 'reflect-updater'
 const APP_SPECIFIC_PASSWORD_URL = 'https://account.apple.com'
 const BETA_UPDATER_FEED_TAG = 'updater-beta'
 const STABLE_UPDATER_ENDPOINT = 'https://github.com/team-reflect/reflect-open/releases/latest/download/latest.json'
+const INTEL_MAC_TARGET = 'x86_64-apple-darwin'
+const INTEL_ONNX_RUNTIME_VERSION = '1.23.2'
+const INTEL_ONNX_RUNTIME_ARCHIVE_ROOT = `onnxruntime-osx-x86_64-${INTEL_ONNX_RUNTIME_VERSION}`
+const INTEL_ONNX_RUNTIME_URL =
+  `https://github.com/microsoft/onnxruntime/releases/download/v${INTEL_ONNX_RUNTIME_VERSION}/` +
+  `${INTEL_ONNX_RUNTIME_ARCHIVE_ROOT}.tgz`
+const ONNX_RUNTIME_DYLIB_RESOURCE = 'libonnxruntime.dylib'
+const INTEL_ONNX_RUNTIME_RESOURCE_SOURCE = `resources/onnxruntime/${ONNX_RUNTIME_DYLIB_RESOURCE}`
 
 /**
  * Build flavors. Each ships as a distinct app (its own productName, identifier
@@ -46,6 +64,20 @@ const FLAVOR_OVERLAYS = {
   beta: 'src-tauri/tauri.beta.conf.json',
   dev: 'src-tauri/tauri.dev.conf.json',
 }
+
+const MACOS_RELEASE_TARGETS = {
+  'aarch64-apple-darwin': {
+    arch: 'aarch64',
+    label: 'Apple Silicon',
+    platform: 'darwin-aarch64',
+  },
+  'x86_64-apple-darwin': {
+    arch: 'x86_64',
+    label: 'Intel',
+    platform: 'darwin-x86_64',
+  },
+}
+const DEFAULT_PUBLISH_TARGETS = ['aarch64-apple-darwin', 'x86_64-apple-darwin']
 
 const here = dirname(fileURLToPath(import.meta.url))
 const appDir = join(here, '..')
@@ -80,8 +112,8 @@ function listUserKeychains() {
 }
 
 /** Build the Tauri CLI arguments for release packaging. */
-export function createTauriBuildArgs({ flavor, hasUpdater }) {
-  const buildArgs = ['tauri', 'build', '--bundles', 'app']
+export function createTauriBuildArgs({ flavor, hasUpdater, resourceConfig = null, target }) {
+  const buildArgs = ['tauri', 'build', '--target', target, '--bundles', 'app']
   const overlay = FLAVOR_OVERLAYS[flavor]
   if (overlay) buildArgs.push('--config', overlay)
   // The beta and dev overlays pin their own updater feed; the stable flavor has
@@ -96,7 +128,60 @@ export function createTauriBuildArgs({ flavor, hasUpdater }) {
   if (hasUpdater) {
     buildArgs.push('--config', JSON.stringify({ bundle: { createUpdaterArtifacts: true } }))
   }
+  if (resourceConfig) {
+    buildArgs.push('--config', JSON.stringify(resourceConfig))
+  }
   return buildArgs
+}
+
+export function macosTargetResourceConfig(target) {
+  if (target !== INTEL_MAC_TARGET) return null
+  return {
+    bundle: {
+      resources: {
+        [INTEL_ONNX_RUNTIME_RESOURCE_SOURCE]: ONNX_RUNTIME_DYLIB_RESOURCE,
+        'resources/onnxruntime/LICENSE': 'onnxruntime/LICENSE',
+        'resources/onnxruntime/ThirdPartyNotices.txt': 'onnxruntime/ThirdPartyNotices.txt',
+      },
+    },
+  }
+}
+
+function stageIntelOnnxRuntime() {
+  const resourceDir = join(appDir, 'src-tauri', 'resources', 'onnxruntime')
+  const dylib = join(resourceDir, ONNX_RUNTIME_DYLIB_RESOURCE)
+  const license = join(resourceDir, 'LICENSE')
+  const notices = join(resourceDir, 'ThirdPartyNotices.txt')
+  if (existsSync(dylib) && existsSync(license) && existsSync(notices)) {
+    return
+  }
+
+  const tempDir = mkdtempSync(join(tmpdir(), 'reflect-onnxruntime-'))
+  try {
+    const archive = join(tempDir, `${INTEL_ONNX_RUNTIME_ARCHIVE_ROOT}.tgz`)
+    log(`downloading ONNX Runtime ${INTEL_ONNX_RUNTIME_VERSION} for Intel macOS…`)
+    execFileSync(
+      'curl',
+      ['-fL', '--retry', '3', '--retry-delay', '2', '-o', archive, INTEL_ONNX_RUNTIME_URL],
+      { stdio: 'inherit' },
+    )
+    execFileSync('tar', ['-xzf', archive, '-C', tempDir], { stdio: 'inherit' })
+
+    const root = join(tempDir, INTEL_ONNX_RUNTIME_ARCHIVE_ROOT)
+    mkdirSync(resourceDir, { recursive: true })
+    copyFileSync(join(root, 'lib', ONNX_RUNTIME_DYLIB_RESOURCE), dylib)
+    copyFileSync(join(root, 'LICENSE'), license)
+    copyFileSync(join(root, 'ThirdPartyNotices.txt'), notices)
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+function prepareTargetResources(target) {
+  const resourceConfig = macosTargetResourceConfig(target)
+  if (!resourceConfig) return null
+  stageIntelOnnxRuntime()
+  return resourceConfig
 }
 
 /**
@@ -208,15 +293,24 @@ function resolveUpdaterSigningEnv() {
   }
 }
 
+function releaseTargetConfig(target) {
+  const config = MACOS_RELEASE_TARGETS[target]
+  if (!config) {
+    fail(`unsupported macOS release target "${target}" — one of: ${Object.keys(MACOS_RELEASE_TARGETS).join(', ')}`)
+  }
+  return config
+}
+
 /**
- * The architecture segment of the host triple (e.g. "aarch64"). Taken from
- * rustc — the same source Tauri names bundle artifacts from — rather than
- * process.arch, which diverges when Node runs under Rosetta.
+ * The host triple from rustc rather than process.arch, which diverges when
+ * Node runs under Rosetta. Used as the local build default only; published
+ * releases build every target in DEFAULT_PUBLISH_TARGETS.
  */
-function hostArch() {
-  const arch = capture('rustc', ['-vV']).match(/^host: (\S+)/m)?.[1]?.split('-')[0]
-  if (!arch) fail('could not determine the host triple from rustc -vV')
-  return arch
+function hostTarget() {
+  const target = capture('rustc', ['-vV']).match(/^host: (\S+)/m)?.[1]
+  if (!target) fail('could not determine the host triple from rustc -vV')
+  releaseTargetConfig(target)
+  return target
 }
 
 /** Parse tauri.conf.json — the source of truth for the version and base bundle name. */
@@ -268,13 +362,13 @@ function resolveFlavor({ flavorFlag, version, forPublish }) {
 }
 
 /** Derive bundle output paths from the flavor's resolved config and cargo's target dir. */
-function bundlePaths(flavor) {
+function bundlePaths(flavor, target) {
   const conf = readFlavorConf(flavor)
+  const { arch } = releaseTargetConfig(target)
   const metadata = JSON.parse(
     capture('cargo', ['metadata', '--format-version', '1', '--no-deps'], { cwd: repoRoot }),
   )
-  const arch = hostArch()
-  const bundleDir = join(metadata.target_directory, 'release', 'bundle')
+  const bundleDir = join(metadata.target_directory, target, 'release', 'bundle')
   return {
     app: join(bundleDir, 'macos', `${conf.productName}.app`),
     dmg: join(bundleDir, 'dmg', `${conf.productName}_${conf.version}_${arch}.dmg`),
@@ -286,29 +380,40 @@ function bundlePaths(flavor) {
 }
 
 /**
- * Write the updater manifest next to the bundle and return its path. The stable
- * updater feed resolves `releases/latest/download/latest.json`, so every
- * published release must carry this file — it is how installed apps discover the
- * new version and verify its payload.
+ * Create the updater manifest body. The stable updater feed resolves
+ * `releases/latest/download/latest.json`, so every published release must carry
+ * this file — it is how installed apps discover the new version and verify its
+ * payload.
  */
-function writeUpdaterManifest({ version, tag, flavor }) {
-  const { updaterArchive, updaterSignature } = bundlePaths(flavor)
-  const slug = capture('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']).trim()
-  // GitHub rewrites spaces in uploaded asset names to dots, so a flavor whose
-  // productName has a space ("Reflect Beta") is served under a dotted name. The
-  // manifest URL must match the *uploaded* name or auto-update gets a 404.
-  const assetName = basename(updaterArchive).replace(/ /g, '.')
-  const manifest = {
-    version,
-    pub_date: new Date().toISOString(),
-    platforms: {
-      [`darwin-${hostArch()}`]: {
-        signature: readFileSync(updaterSignature, 'utf8').trim(),
-        url: `https://github.com/${slug}/releases/download/${tag}/${assetName}`,
-      },
-    },
+export function createUpdaterManifest({ artifacts, pubDate, slug, tag, version }) {
+  const platforms = {}
+  for (const artifact of artifacts) {
+    // GitHub rewrites spaces in uploaded asset names to dots, so a flavor whose
+    // productName has a space ("Reflect Beta") is served under a dotted name.
+    // The manifest URL must match the uploaded name or auto-update gets a 404.
+    const assetName = basename(artifact.updaterArchive).replace(/ /g, '.')
+    platforms[artifact.platform] = {
+      signature: readFileSync(artifact.updaterSignature, 'utf8').trim(),
+      url: `https://github.com/${slug}/releases/download/${tag}/${assetName}`,
+    }
   }
-  const manifestPath = join(dirname(updaterArchive), 'latest.json')
+  return {
+    version,
+    pub_date: pubDate,
+    platforms,
+  }
+}
+
+function writeUpdaterManifest({ artifacts, outputDir, tag, version }) {
+  const slug = capture('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']).trim()
+  const manifest = createUpdaterManifest({
+    artifacts,
+    pubDate: new Date().toISOString(),
+    slug,
+    tag,
+    version,
+  })
+  const manifestPath = join(outputDir, 'latest.json')
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
   return manifestPath
 }
@@ -376,9 +481,9 @@ function cleanupSigningCertificate(signingCertificate) {
   rmSync(signingCertificate.tempDir, { recursive: true, force: true })
 }
 
-function createDmg({ flavor, identity, keychain }) {
+function createDmg({ flavor, identity, keychain, target }) {
   const conf = readFlavorConf(flavor)
-  const { app, dmg } = bundlePaths(flavor)
+  const { app, dmg } = bundlePaths(flavor, target)
   if (!existsSync(app)) fail(`${app} does not exist — tauri did not produce the app bundle`)
 
   const stagingRoot = mkdtempSync(join(tmpdir(), 'reflect-dmg-'))
@@ -443,8 +548,8 @@ function expectCheck(description, command, args, expected) {
 }
 
 /** Verify the built bundles match the expected distribution state. */
-function verify({ notarized, flavor }) {
-  const { app, dmg } = bundlePaths(flavor)
+function verify({ notarized, flavor, target }) {
+  const { app, dmg } = bundlePaths(flavor, target)
   if (!existsSync(app)) fail(`${app} does not exist — run \`pnpm release:macos\` first`)
   if (!existsSync(dmg)) fail(`${dmg} does not exist — run \`pnpm release:macos\` first`)
 
@@ -472,22 +577,127 @@ function verify({ notarized, flavor }) {
   expectCheck('stapled ticket (dmg)', 'xcrun', ['stapler', 'validate', dmg], ['The validate action worked!'])
 }
 
-function printArtifacts(flavor) {
-  const { app, dmg } = bundlePaths(flavor)
+function printArtifacts(flavor, target) {
+  const { app, dmg } = bundlePaths(flavor, target)
   const dmgSizeMb = (statSync(dmg).size / (1024 * 1024)).toFixed(1)
   log('distribution bundles:')
   console.log(`  ${app}`)
   console.log(`  ${dmg} (${dmgSizeMb} MB)`)
 }
 
-function build({ notarize, requireUpdater = false, flavor }) {
+function releaseAssetName({ productName, version, target, type }) {
+  const { arch } = releaseTargetConfig(target)
+  const prefix = `${productName}_${version}_${arch}`
+  switch (type) {
+    case 'dmg':
+      return `${prefix}.dmg`
+    case 'updaterArchive':
+      return `${prefix}.app.tar.gz`
+    case 'updaterSignature':
+      return `${prefix}.app.tar.gz.sig`
+    default:
+      fail(`unknown release asset type "${type}"`)
+  }
+}
+
+function exportReleaseArtifacts({ artifactDir, flavor, target }) {
+  const conf = readFlavorConf(flavor)
+  const targetConfig = releaseTargetConfig(target)
+  const paths = bundlePaths(flavor, target)
+  const exported = {
+    dmg: join(
+      artifactDir,
+      releaseAssetName({ productName: conf.productName, version: conf.version, target, type: 'dmg' }),
+    ),
+    updaterArchive: join(
+      artifactDir,
+      releaseAssetName({ productName: conf.productName, version: conf.version, target, type: 'updaterArchive' }),
+    ),
+    updaterSignature: join(
+      artifactDir,
+      releaseAssetName({ productName: conf.productName, version: conf.version, target, type: 'updaterSignature' }),
+    ),
+  }
+
+  mkdirSync(artifactDir, { recursive: true })
+  copyFileSync(paths.dmg, exported.dmg)
+  copyFileSync(paths.updaterArchive, exported.updaterArchive)
+  copyFileSync(paths.updaterSignature, exported.updaterSignature)
+  writeFileSync(
+    join(artifactDir, `${target}.json`),
+    `${JSON.stringify(
+      {
+        version: conf.version,
+        productName: conf.productName,
+        flavor,
+        target,
+        platform: targetConfig.platform,
+        assets: {
+          dmg: basename(exported.dmg),
+          updaterArchive: basename(exported.updaterArchive),
+          updaterSignature: basename(exported.updaterSignature),
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  )
+  log(`exported ${targetConfig.label} release artifacts to ${artifactDir}`)
+}
+
+function readReleaseArtifact({ artifactDir, expectedFlavor, expectedProductName, expectedTarget, expectedVersion }) {
+  const metadataPath = join(artifactDir, `${expectedTarget}.json`)
+  if (!existsSync(metadataPath)) fail(`missing release artifact metadata ${metadataPath}`)
+
+  const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'))
+  const targetConfig = releaseTargetConfig(metadata.target)
+  if (metadata.target !== expectedTarget) fail(`${metadataPath} describes ${metadata.target}, expected ${expectedTarget}`)
+  if (metadata.version !== expectedVersion) {
+    fail(`${metadataPath} describes version ${metadata.version}, expected ${expectedVersion}`)
+  }
+  if (metadata.flavor !== expectedFlavor) fail(`${metadataPath} describes flavor ${metadata.flavor}, expected ${expectedFlavor}`)
+  if (metadata.productName !== expectedProductName) {
+    fail(`${metadataPath} describes product ${metadata.productName}, expected ${expectedProductName}`)
+  }
+  if (metadata.platform !== targetConfig.platform) {
+    fail(`${metadataPath} describes platform ${metadata.platform}, expected ${targetConfig.platform}`)
+  }
+
+  const artifact = {
+    target: metadata.target,
+    platform: metadata.platform,
+    dmg: join(artifactDir, metadata.assets.dmg),
+    updaterArchive: join(artifactDir, metadata.assets.updaterArchive),
+    updaterSignature: join(artifactDir, metadata.assets.updaterSignature),
+  }
+  for (const path of [artifact.dmg, artifact.updaterArchive, artifact.updaterSignature]) {
+    if (!existsSync(path)) fail(`missing release artifact ${path}`)
+  }
+  return artifact
+}
+
+function readReleaseArtifacts({ artifactDir, flavor, productName, targets, version }) {
+  return targets.map((target) =>
+    readReleaseArtifact({
+      artifactDir,
+      expectedFlavor: flavor,
+      expectedProductName: productName,
+      expectedTarget: target,
+      expectedVersion: version,
+    }),
+  )
+}
+
+function build({ artifactDir, notarize, requireUpdater = false, flavor, target }) {
+  const targetConfig = releaseTargetConfig(target)
   const identity = findSigningIdentity()
   log(`signing identity: ${identity}`)
+  log(`release target: ${targetConfig.label} (${target})`)
 
   const updater = resolveUpdaterSigningEnv()
   if (updater) {
     log(`updater signing key: ${updater.source}`)
-  } else if (requireUpdater) {
+  } else if (requireUpdater || artifactDir) {
     fail(
       'no updater signing key found.\n' +
         '  Published releases must carry updater artifacts, or installed apps stop receiving\n' +
@@ -544,12 +754,13 @@ function build({ notarize, requireUpdater = false, flavor }) {
   // script depends on Finder automation and has proven brittle on GitHub-hosted
   // macOS images; create the DMG directly below and keep the same notarization
   // and Gatekeeper checks around the final artifact.
-  const buildArgs = createTauriBuildArgs({ flavor, hasUpdater: Boolean(updater) })
+  const resourceConfig = prepareTargetResources(target)
+  const buildArgs = createTauriBuildArgs({ flavor, hasUpdater: Boolean(updater), resourceConfig, target })
   const result = spawnSync('pnpm', buildArgs, { cwd: appDir, stdio: 'inherit', env: buildEnv })
   if (result.status !== 0) fail('tauri build failed')
 
   if (updater) {
-    const { updaterArchive, updaterSignature } = bundlePaths(flavor)
+    const { updaterArchive, updaterSignature } = bundlePaths(flavor, target)
     if (!existsSync(updaterArchive) || !existsSync(updaterSignature)) {
       fail(`updater artifacts missing after build — expected ${updaterArchive} and its .sig`)
     }
@@ -557,13 +768,14 @@ function build({ notarize, requireUpdater = false, flavor }) {
 
   const signingCertificate = importSigningCertificate()
   try {
-    createDmg({ flavor, identity, keychain: signingCertificate?.keychainPath })
+    createDmg({ flavor, identity, keychain: signingCertificate?.keychainPath, target })
   } finally {
     cleanupSigningCertificate(signingCertificate)
   }
-  if (notarize) notarizeDmg(bundlePaths(flavor).dmg, credentials)
-  verify({ notarized: notarize, flavor })
-  printArtifacts(flavor)
+  if (notarize) notarizeDmg(bundlePaths(flavor, target).dmg, credentials)
+  verify({ notarized: notarize, flavor, target })
+  printArtifacts(flavor, target)
+  if (artifactDir) exportReleaseArtifacts({ artifactDir, flavor, target })
   log(notarize ? 'done — ready to distribute' : 'done — signed but NOT notarized')
 }
 
@@ -704,7 +916,7 @@ function updateBetaFeed({ commit, manifestPath }) {
  * pre-release. All preflight checks run before the build so a doomed publish
  * fails in seconds, not after notarization.
  */
-function publish({ draft, flavorFlag }) {
+function ensurePublishableRelease({ flavorFlag }) {
   ensureGhReady()
   const commit = ensurePublishableCommit()
   const { version } = readTauriConf()
@@ -713,17 +925,41 @@ function publish({ draft, flavorFlag }) {
   const tag = `v${version}`
   ensureReleaseIsNew(tag)
   ensureTagMatchesCommit(tag, commit)
+  return { commit, flavor, productName, tag, version }
+}
 
-  build({ notarize: true, requireUpdater: true, flavor })
+function preflight({ flavorFlag }) {
+  const { commit, tag } = ensurePublishableRelease({ flavorFlag })
+  log(`${tag} is publishable from ${commit.slice(0, 7)}`)
+}
 
-  const { dmg, updaterArchive, updaterSignature } = bundlePaths(flavor)
-  const manifestPath = writeUpdaterManifest({ version, tag, flavor })
+function publish({ draft, flavorFlag, fromArtifacts }) {
+  const { commit, flavor, productName, tag, version } = ensurePublishableRelease({ flavorFlag })
+  const artifactDir = fromArtifacts ?? mkdtempSync(join(tmpdir(), 'reflect-release-assets-'))
+
+  if (!fromArtifacts) {
+    for (const target of DEFAULT_PUBLISH_TARGETS) {
+      build({ artifactDir, notarize: true, requireUpdater: true, flavor, target })
+    }
+  }
+
+  const artifacts = readReleaseArtifacts({
+    artifactDir,
+    flavor,
+    productName,
+    targets: DEFAULT_PUBLISH_TARGETS,
+    version,
+  })
+  const manifestPath = writeUpdaterManifest({ artifacts, outputDir: artifactDir, tag, version })
   // Pre-releases are invisible to `releases/latest` — the stable updater feed —
   // so installed stable apps never see a beta.
   const prerelease = version.includes('-')
   log(`creating GitHub ${prerelease ? 'pre-release' : 'release'} ${tag} from commit ${commit.slice(0, 7)}…`)
   const releaseArgs = createReleaseArgs({
-    assets: [dmg, updaterArchive, updaterSignature, manifestPath],
+    assets: [
+      ...artifacts.flatMap((artifact) => [artifact.dmg, artifact.updaterArchive, artifact.updaterSignature]),
+      manifestPath,
+    ],
     commit,
     draft,
     prerelease,
@@ -815,6 +1051,7 @@ const USAGE = `Usage: pnpm release:macos [command] [flags]
 
 Commands:
   build          Signed + notarized release build, then verify (default)
+  preflight      Check that the current commit can publish before CI spends macOS minutes
   setup          Store the notarization Apple ID + app-specific password in the keychain
   setup-updater  Generate the auto-update signing keypair (keychain + pubkey to commit)
   verify         Re-run signing/Gatekeeper checks on already-built bundles
@@ -823,6 +1060,11 @@ Commands:
 Flags:
   --no-notarize   Skip notarization (signed-only build/verify)
   --draft         Create the GitHub release as a draft (publish only)
+  --target=<name> Build or verify one target: aarch64-apple-darwin | x86_64-apple-darwin
+  --artifact-dir=<path>
+                  Export release assets and metadata after build (build only)
+  --from-artifacts=<path>
+                  Publish already-built release assets from this directory (publish only)
   --flavor=<name> Build a flavor: stable | beta | dev (default: derived from the
                   version — prerelease → beta, else stable; publish ignores this
                   and always uses the version's channel)
@@ -834,39 +1076,63 @@ async function main() {
   const argv = process.argv.slice(2)
   const flags = argv.filter((arg) => arg.startsWith('--'))
   const commands = argv.filter((arg) => !arg.startsWith('--'))
+  const command = commands[0] ?? 'build'
   const flavorFlag = flags.find((flag) => flag.startsWith('--flavor='))?.slice('--flavor='.length)
+  const targetFlag = flags.find((flag) => flag.startsWith('--target='))?.slice('--target='.length)
+  const artifactDir = flags.find((flag) => flag.startsWith('--artifact-dir='))?.slice('--artifact-dir='.length)
+  const fromArtifacts = flags.find((flag) => flag.startsWith('--from-artifacts='))?.slice('--from-artifacts='.length)
   const unknownFlag = flags.find(
-    (flag) => !['--no-notarize', '--draft', '--help'].includes(flag) && !flag.startsWith('--flavor='),
+    (flag) =>
+      !['--no-notarize', '--draft', '--help'].includes(flag) &&
+      !flag.startsWith('--flavor=') &&
+      !flag.startsWith('--target=') &&
+      !flag.startsWith('--artifact-dir=') &&
+      !flag.startsWith('--from-artifacts='),
   )
   if (unknownFlag) fail(`unknown flag "${unknownFlag}"\n\n${USAGE}`)
   if (flavorFlag && !Object.keys(FLAVOR_OVERLAYS).includes(flavorFlag)) {
     fail(`unknown --flavor "${flavorFlag}" — one of: ${Object.keys(FLAVOR_OVERLAYS).join(', ')}`)
   }
+  if (targetFlag) releaseTargetConfig(targetFlag)
+  if (targetFlag && !['build', 'verify'].includes(command)) fail('--target only applies to build and verify')
+  if (artifactDir && command !== 'build') fail('--artifact-dir only applies to build')
+  if (fromArtifacts && command !== 'publish') fail('--from-artifacts only applies to publish')
   if (flags.includes('--help')) {
     console.log(USAGE)
     return
   }
-  if (process.platform !== 'darwin') fail('this command only runs on macOS')
 
-  const command = commands[0] ?? 'build'
+  const needsMacos =
+    ['build', 'setup', 'setup-updater', 'verify'].includes(command) || (command === 'publish' && !fromArtifacts)
+  if (needsMacos && process.platform !== 'darwin') fail('this command only runs on macOS')
+
   const notarize = !flags.includes('--no-notarize')
   if (command === 'publish' && !notarize) fail('publish always notarizes — drop --no-notarize')
   if (command !== 'publish' && flags.includes('--draft')) fail('--draft only applies to publish')
   const { version } = readTauriConf()
   switch (command) {
     case 'build':
-      return build({ notarize, flavor: resolveFlavor({ flavorFlag, version, forPublish: false }) })
+      return build({
+        artifactDir,
+        notarize,
+        requireUpdater: Boolean(artifactDir),
+        flavor: resolveFlavor({ flavorFlag, version, forPublish: false }),
+        target: targetFlag ?? hostTarget(),
+      })
+    case 'preflight':
+      return preflight({ flavorFlag })
     case 'setup':
       return setup()
     case 'setup-updater':
       return setupUpdater()
     case 'verify': {
       const flavor = resolveFlavor({ flavorFlag, version, forPublish: false })
-      verify({ notarized: notarize, flavor })
-      return printArtifacts(flavor)
+      const target = targetFlag ?? hostTarget()
+      verify({ notarized: notarize, flavor, target })
+      return printArtifacts(flavor, target)
     }
     case 'publish':
-      return publish({ draft: flags.includes('--draft'), flavorFlag })
+      return publish({ draft: flags.includes('--draft'), flavorFlag, fromArtifacts })
     default:
       fail(`unknown command "${command}"\n\n${USAGE}`)
   }

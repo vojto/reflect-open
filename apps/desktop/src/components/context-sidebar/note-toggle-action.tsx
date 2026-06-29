@@ -17,12 +17,16 @@ interface NoteToggleActionProps {
   icon: ReactNode
   /** Button label for each flag state (the action offered, not the state). */
   labels: { active: string; inactive: string }
-  /** Operation names for failure surfacing, per toggle direction. */
-  operations: { activate: string; deactivate: string }
+  /** Operation label used when the frontmatter write fails. */
+  failureLabel: string
   /** Keybinding hint, from the matching command definition. */
   keybinding?: string | null
   /** Optional tooltip explaining the flag's meaning. */
   tooltip?: string
+  /** Optional side-effect for surfaces that also expose this flag elsewhere. */
+  applyOptimistic?: (active: boolean) => void
+  /** Optional reconciliation for optimistic side effects after a failed write. */
+  onFailure?: () => void
 }
 
 /**
@@ -49,9 +53,11 @@ export function NoteToggleAction({
   toggle,
   icon,
   labels,
-  operations,
+  failureLabel,
   keybinding = null,
   tooltip,
+  applyOptimistic,
+  onFailure,
 }: NoteToggleActionProps): ReactElement {
   const { graph } = useGraph()
   // Guards against a double-click racing two read-patch-write toggles.
@@ -71,13 +77,20 @@ export function NoteToggleAction({
     if (generation === undefined) {
       return
     }
+    const optimisticActive = !isActive
+    applyOptimistic?.(optimisticActive)
+    setPending({ path, active: optimisticActive })
     setIsToggling(true)
     try {
-      setPending({ path, active: await toggle(path, generation) })
+      const active = await toggle(path, generation)
+      if (active !== optimisticActive) {
+        applyOptimistic?.(active)
+      }
+      setPending({ path, active })
     } catch (cause) {
-      startOperation(isActive ? operations.deactivate : operations.activate).fail(
-        errorMessage(cause),
-      )
+      setPending(null)
+      onFailure?.()
+      startOperation(failureLabel).fail(errorMessage(cause))
     } finally {
       setIsToggling(false)
     }

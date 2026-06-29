@@ -10,6 +10,9 @@ app is closed: the host spools into the graph's capture inbox
 (`<graph>/.reflect/inbox/`), and the app drains it on next launch.
 [Plan 11](../../docs/plans/11-link-capture.md) is the design doc.
 
+Install the published extension from the
+[Chrome Web Store](https://chromewebstore.google.com/detail/reflect-capture/ccabifmooehighoonjeiololjfofkhkd).
+
 ## Architecture in one breath
 
 popup → `chrome.storage` queue → background `sendNativeMessage` →
@@ -42,12 +45,14 @@ restart Chrome so it re-reads the manifests.
 That message is the `no-host` state — Chrome could not reach (or was not
 allowlisted by) the native-messaging host. Check, in order:
 
-1. **The extension's ID.** In `chrome://extensions`, the card must read
-   `dlbliojklpickgimjdmjjdnbjdiomjik`. Any other ID means you loaded a
-   **keyless** build (typically `.output/chrome-mv3` right after `pnpm zip`,
-   which builds with `WXT_STORE_BUILD=true`). Rebuild with `pnpm … dev` or
-   `pnpm … build`, then **Reload** the extension. The host allowlists only the
-   pinned ID, so a wrong ID is rejected as "forbidden" → this message.
+1. **The extension's ID.** In `chrome://extensions`, the card must read either
+   `ccabifmooehighoonjeiololjfofkhkd` for the Chrome Web Store listing or
+   `dlbliojklpickgimjdmjjdnbjdiomjik` for an unpacked development build. Any
+   other ID means you loaded a **keyless** local build (typically
+   `.output/chrome-mv3` right after `pnpm zip`, which builds with
+   `WXT_STORE_BUILD=true`). Rebuild with `pnpm … dev` or `pnpm … build`, then
+   **Reload** the extension. The host allowlists only the store and pinned dev
+   IDs, so a wrong ID is rejected as "forbidden" → this message.
 2. **The desktop app has run at least once** on this machine, so it has written
    `~/Library/Application Support/<browser>/NativeMessagingHosts/app.reflect.capture.json`.
    If Chrome was already open when that file appeared, restart Chrome.
@@ -69,14 +74,15 @@ updating that constant silently breaks it. The private half of the key is
 deliberately discarded; unpacked loads only need the public key.
 
 **The Chrome Web Store does not use this key.** It rejects a `key` field in the
-uploaded package (`key field is not allowed in manifest`) and mints its own
-permanent ID for the listing — which will *not* be the ID above. So:
+uploaded package (`key field is not allowed in manifest`) and minted the live
+listing ID `ccabifmooehighoonjeiololjfofkhkd`. So:
 
 - The store artifact must **omit** `key`. `pnpm zip` sets `WXT_STORE_BUILD=true`,
   which drops it; every other build keeps it. (`manifest-key.test.ts` still pins
   the dev key against `EXTENSION_ORIGINS`.)
-- After the listing is created, the native hop will **not** reach store-installed
-  users until the store's assigned ID is allowlisted too — see step 4 below.
+- `apps/desktop/src-tauri/src/capture.rs` must keep both the store ID and the
+  pinned dev ID in `EXTENSION_ORIGINS`, or the native hop will fail for one of
+  the two install modes.
 
 To derive an ID from a key (if it ever has to change):
 
@@ -87,13 +93,13 @@ openssl rsa -in key.pem -pubout -outform DER | shasum -a 256 \
   | head -c 32 | tr '0123456789abcdef' 'abcdefghijklmnop'    # extension ID
 ```
 
-## Releasing to the Chrome Web Store
+## Releasing updates to the Chrome Web Store
 
-The build is store-ready: `pnpm --filter @reflect/extension zip` produces a
-key-stripped, signed-on-upload package whose manifest declares only the permissions
-the code uses (see the justifications below). The remaining work is the listing — the
-copy and disclosures below are written to be pasted straight into the
-[Developer Dashboard](https://chrome.google.com/webstore/devconsole).
+`pnpm --filter @reflect/extension zip` produces a key-stripped,
+signed-on-upload package whose manifest declares only the permissions the code
+uses (see the justifications below). Upload updates to the existing
+[Reflect Capture listing](https://chromewebstore.google.com/detail/reflect-capture/ccabifmooehighoonjeiololjfofkhkd)
+in the [Developer Dashboard](https://chrome.google.com/webstore/devconsole).
 
 ### Build & upload
 
@@ -102,12 +108,9 @@ copy and disclosures below are written to be pasted straight into the
 2. `pnpm --filter @reflect/extension zip` → upload
    `.output/reflect-capture-<version>-chrome.zip`. This artifact omits the manifest
    `key` (the store rejects it); a plain `wxt build` keeps it for unpacked loads.
-3. After the listing is created, copy its **assigned item ID** from the dashboard
-   (it will not be `dlbliojklpickgimjdmjjdnbjdiomjik`).
-4. Append `chrome-extension://<store-id>/` to `EXTENSION_ORIGINS` in
-   `apps/desktop/src-tauri/src/capture.rs` (keep the dev ID) and ship a desktop
-   release — the native-messaging host manifests rewrite themselves on next launch.
-   Until that ships, capture works for unpacked dev loads but not for store installs.
+3. Keep `chrome-extension://ccabifmooehighoonjeiololjfofkhkd/` in
+   `EXTENSION_ORIGINS` in `apps/desktop/src-tauri/src/capture.rs`; the
+   native-messaging host manifests rewrite themselves on each desktop launch.
 
 ### Listing copy
 

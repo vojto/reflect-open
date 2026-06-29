@@ -6,11 +6,12 @@ import { describe, expect, it } from 'vitest'
 /**
  * Drift guard for the pinned extension identity. The manifest `key` in
  * `wxt.config.ts` determines the extension ID everywhere (unpacked dev, CI,
- * the Chrome Web Store), and the desktop app's native-messaging manifests
+ * but not the Chrome Web Store), and the desktop app's native-messaging manifests
  * (`apps/desktop/src-tauri/src/capture.rs`, `EXTENSION_ORIGINS`) must
- * allowlist exactly that ID — they are coupled only by convention, so this
- * test recomputes the derivation (SHA-256 of the DER key, first 16 bytes,
- * hex mapped onto a–p) and pins the two files together.
+ * allowlist that ID for development alongside the published store ID. They
+ * are coupled only by convention, so this test recomputes the derivation
+ * (SHA-256 of the DER key, first 16 bytes, hex mapped onto a-p) and pins the
+ * two files together.
  */
 
 const here = resolve(import.meta.dirname)
@@ -37,8 +38,8 @@ describe('pinned extension identity', () => {
     )
     expect(originMatches.length, 'no extension origins found in capture.rs').toBeGreaterThan(0)
 
-    // The dev/unpacked ID derived from the committed key must be among the
-    // allowlisted origins (the store ID joins the list after first publish).
+    // The dev/unpacked ID derived from the committed key must stay among the
+    // allowlisted origins even though the Chrome Web Store listing has its own ID.
     expect(originMatches).toContain(extensionIdFromKey(keyMatch![1]!))
   })
 })

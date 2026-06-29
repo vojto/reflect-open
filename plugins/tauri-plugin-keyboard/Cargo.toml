@@ -10,8 +10,8 @@ links = "tauri-plugin-keyboard"
 
 [dependencies]
 tauri = { version = "2.11.2" }
-serde = "1.0"
-thiserror = "2"
+serde = "1.0.228"
+thiserror = "2.0.18"
 
 [build-dependencies]
 tauri-plugin = { version = "2.6.2", features = ["build"] }
